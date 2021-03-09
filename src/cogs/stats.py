@@ -80,7 +80,6 @@ class Stats(commands.Cog):
 
     @commands.command(aliases=['gi'])
     @commands.guild_only()
-    @commands.has_role('Reporter')
     async def getindivs(self, ctx: discord.ext.commands.Context, player: str):
         """Retrieves indiv scores of a player. Argument should just be a player name."""
         if player.lower() not in Stats.PLAYERS:
@@ -117,7 +116,6 @@ class Stats(commands.Cog):
 
     @commands.command(aliases=['gp'])
     @commands.guild_only()
-    @commands.has_role('Reporter')
     async def getpairs(self, ctx: discord.ext.commands.Context, player1: str, player2: str):
         """Retrieves pair data for two players. Argument should be two players in the roster."""
         player1 = player1.lower()
@@ -160,7 +158,6 @@ class Stats(commands.Cog):
 
     @commands.command(aliases=['gb'])
     @commands.guild_only()
-    @commands.has_role('Reporter')
     async def getbagger(self, ctx: discord.ext.commands.Context, player: str):
         """Retrieves bagger scores of a player. Argument should just be a player name."""
         if player.lower() not in Stats.PLAYERS:
