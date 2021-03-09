@@ -56,7 +56,7 @@ class Stats(commands.Cog):
             for k in range(i+1,len(player_list)):
                 if player_list[i].lower() not in Stats.PLAYERS or player_list[k].lower() not in Stats.PLAYERS:
                     raise commands.BadArgument
-                pairlist.append(f"{player_list[i]} and {player_list[k]}")
+                pairlist.append(f"{player_list[i].lower()} and {player_list[k].lower()}")
         print(pairlist)
         return result, pairlist
 
