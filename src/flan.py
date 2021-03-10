@@ -42,6 +42,9 @@ async def on_command_error(ctx, error: discord.ext.commands.CommandError):
     if isinstance(error, commands.NoPrivateMessage):
         await(await ctx.send("You can't use this command in DMs!")).delete(delay=5)
         return
+    if isinstance(error, commands.MaxConcurrencyReached):
+        await ctx.send("There is a pending update. Either let it timeout, or respond with 'n' to it to invoke another update.")
+        return
     raise error
 
 bot.run(token, bot=True, reconnect=True)

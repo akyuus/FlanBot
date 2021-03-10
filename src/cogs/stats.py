@@ -55,7 +55,7 @@ class Stats(commands.Cog):
         for i in range(len(player_list)):
             for k in range(i+1,len(player_list)):
                 if player_list[i].lower() not in Stats.PLAYERS or player_list[k].lower() not in Stats.PLAYERS:
-                    raise commands.BadArgument
+                    continue
                 pairlist.append(f"{player_list[i].lower()} and {player_list[k].lower()}")
         print(pairlist)
         return result, pairlist
@@ -78,11 +78,38 @@ class Stats(commands.Cog):
         their_shocks = int(match_list[3])
         return player, date, team, our_shocks, their_shocks
 
+    @staticmethod
+    def parse_all(arg: str) -> Tuple[str, str, str, str]:
+        regex = (
+            r'^(?P<result>W|w|L|l)\s+(?P<team>.+)\s+\[(?P<runner1>\w+),\s+(?P<runner2>\w+),\s+(?P<runner3>\w+),\s+(?P<runner4>\w+)\]\s+'
+            r'\[(?P<score1>\d{2,3}),\s+(?P<score2>\d{2,3}),\s+(?P<score3>\d{2,3}),\s+(?P<score4>\d{2,3})\]\s+'
+            r'(?P<bagger>\w+)\s+(?P<shocks_pulled>\d+)\s+(?P<opponent_shocks>\d+)$')
+        match = re.match(regex, arg)
+        if not match:
+            raise commands.BadArgument
+
+        result = match.group('result')
+        team = match.group('team')
+        runners = []
+        scores = []
+        for i in range(1, 5):
+            runners.append(match.group(f"runner{i}"))
+            scores.append(match.group(f"score{i}"))
+        bagger = match.group('bagger')
+        shocks_pulled = int(match.group('shocks_pulled'))
+        opponent_shocks = int(match.group('opponent_shocks'))
+        indiv_arg = f"{team} [{', '.join(runners)}] [{', '.join(scores)}]"
+        pair_arg = f"{result} [{', '.join(runners)}, {bagger}]"
+        bagger_arg = f"{bagger} {team} {shocks_pulled} {opponent_shocks}"
+        war_arg = f"{team} {result}"
+        return indiv_arg, pair_arg, bagger_arg, war_arg
+
     @commands.command(aliases=['gi'])
     @commands.guild_only()
     async def getindivs(self, ctx: discord.ext.commands.Context, player: str):
         """Retrieves indiv scores of a player. Argument should just be a player name."""
-        if player.lower() not in Stats.PLAYERS:
+        player = player.lower()
+        if player not in Stats.PLAYERS:
             await ctx.channel.send(f"{player} is not in the roster.")
             return
 
@@ -193,8 +220,46 @@ class Stats(commands.Cog):
         await ctx.channel.send(msg)
         return
 
+    @commands.command(aliases=['gw'])
+    @commands.guild_only()
+    async def getwars(self, ctx: discord.ext.commands.Context, team: str=None):
+        """Gets the war record against a team. You can provide a tag, or no arguments to get the first 10 records."""
+        if team:
+            sql_string = """select Team, Wins, Losses, (Wins*1.0/(Wins+Losses))
+                            from WarStats WS
+                            where WS.Team=? and Wins+Losses != 0"""
+            self.cur.execute(sql_string, (team,))
+        else:
+            sql_string = """select Team, Wins, Losses, (Wins*1.0/(Wins+Losses))
+                            from WarStats WS
+                            where Wins+Losses != 0
+                            limit 10"""
+            self.cur.execute(sql_string)
+
+        rows = self.cur.fetchall()
+        if not rows:
+            await ctx.channel.send("No record found.")
+            return
+
+        t = "Team"
+        w = "Wins"
+        l = "Losses"
+        r = "W/L Ratio"
+        msg = f"```Record vs {team}:\n\n" if team else f"```Latest records:\n\n"
+        msg += f"{t:<8}|{w:^6}|{l:^12}|{r:^12}\n"
+        msg += '-' * 38 + '\n'
+
+        for row in rows:
+            msg += f"{row[0]:<8}|{row[1]:^6}|{row[2]:^12}|{row[3]:^12.2%}\n"
+
+        msg.rstrip()
+        msg += "```"
+        await ctx.channel.send(msg)
+        return
+
     @commands.command(aliases=['ui'])
     @commands.guild_only()
+    @commands.max_concurrency(1)
     @commands.has_role('Reporter')
     async def updateindivs(self, ctx: discord.ext.commands.Context, *, arg: str):
         """Updates the indiv database. Arguments should be <opposing team tag> [<runner1>, <runner2>, <runner3>, <runner4>] [<score1>, <score2>, <score3>, <score4>]"""
@@ -203,7 +268,7 @@ class Stats(commands.Cog):
         for key in parsed:
             if key == 'opposing_team':
                 continue
-            msg += f"**{key+':':<15} **{parsed[key]:>3}\n"
+            msg += f"**{key+':':<15} **{parsed[key]:>8}\n"
         msg.strip()
         await ctx.channel.send(msg)
         await ctx.channel.send('Does this information look correct? (y/n)')
@@ -232,6 +297,7 @@ class Stats(commands.Cog):
 
     @commands.command(aliases=['up'])
     @commands.guild_only()
+    @commands.max_concurrency(1)
     @commands.has_role('Reporter')
     async def updatepairs(self, ctx: discord.ext.commands.Context, *, arg: str):
         """Updates the pair database. This is only for MKPS players. Arguments should be W (or L) [<player1>, <player2>, <player3>, <player4>, <player5>]"""
@@ -267,6 +333,7 @@ class Stats(commands.Cog):
 
     @commands.command(aliases=['ub'])
     @commands.guild_only()
+    @commands.max_concurrency(1)
     @commands.has_role('Reporter')
     async def updatebaggers(self, ctx: discord.ext.commands.Context, *, arg: str):
         """Updates the bagger database. Arguments should be <bagger name> <team> <shocks obtained> <opponent shocks obtained>"""
@@ -290,6 +357,57 @@ class Stats(commands.Cog):
         except asyncio.TimeoutError:
             pass
 
+    @commands.command(aliases=['uw'])
+    @commands.guild_only()
+    @commands.max_concurrency(1)
+    @commands.has_role('Reporter')
+    async def updatewars(self, ctx: discord.ext.commands.Context, *, arg: str):
+        """Updates the war record. Syntax is <opposing_team_tag> <W/L>"""
+        regex = r"(?P<team>\S+)\s+(?P<result>W|w|L|l)"
+        match = re.match(regex, arg)
+        if not match:
+            raise commands.BadArgument
+        team = match.group('team')
+        result = match.group('result')
+
+        msg = f"This will be reported as a **win** against {team}. Is that okay? (y/n)" if result.lower() == 'w' else f"This will be reported as a **loss** against {team}. Is that okay? (y/n)"
+        await ctx.channel.send(msg)
+
+        def check(m: discord.Message):
+            return (m.author == ctx.author) and (m.content == 'y' or m.content == 'Y' or m.content == 'n' or m.content == 'N')
+        try:
+            msg = await self.bot.wait_for('message', check=check, timeout=30.0)
+            if msg.content.lower() == 'n':
+                await ctx.channel.send('Ok, ignoring...')
+                return
+            await ctx.channel.send('Ok, updating...')
+            if result.lower() == 'w':
+                sql_string = """insert into WarStats(Team, Wins, Losses) 
+                                values(?, ?, ?) 
+                                on conflict(Team) do update set Wins = Wins + 1"""
+                self.cur.execute(sql_string, (team,1,0))
+            else:
+                sql_string = """insert into WarStats(Team, Wins, Losses) 
+                                values(?, ?, ?) 
+                                on conflict(Team) do update set Losses = Losses + 1"""
+                self.cur.execute(sql_string, (team, 0, 1))
+            self.con.commit()
+            await ctx.channel.send('Updated')
+        except asyncio.TimeoutError:
+            pass
+
+    @commands.command(aliases=['ua'])
+    @commands.guild_only()
+    @commands.max_concurrency(1)
+    @commands.has_role('Reporter')
+    async def updateall(self, ctx: discord.ext.commands.Context, *, arg: str):
+        """Updates everything at once. Syntax is complex. Check https://github.com/akyuus/FlanBot for an example."""
+        (indiv_arg, pair_arg, bagger_arg, war_arg) = self.parse_all(arg)
+        await self.updateindivs(ctx, arg=indiv_arg)
+        await self.updatepairs(ctx, arg=pair_arg)
+        await self.updatebaggers(ctx, arg=bagger_arg)
+        await self.updatewars(ctx, arg=war_arg)
+        return
 
     @commands.command(aliases=['init'])
     @commands.guild_only()
