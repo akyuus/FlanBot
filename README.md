@@ -18,6 +18,11 @@ Example: `~gp alice1 alice2`
 
 Example: `~gb bobby`
 
+### Get Wars
+`~gw <opposing_team_tag>` OR `~gw`
+
+Example: `~gw Mw` OR `~gw`
+
 ### Update Indivs
 `~ui <opposing_team_tag> [<runner1>, ..., <runner4>] [<score1>, ... <score4>]`
 
@@ -34,3 +39,10 @@ Example: `~ui W [alice1, alice2, alice3, alice4, alice5]`
 `~ub <bagger_name> <team> <shocks_pulled> <opponent_shocks_pulled>`
 
 Example: `~ub alice Fw 7 4`
+
+### Update All
+```
+~ua (W or L) <opposing_team_tag> [<runner1>, ..., <runner4>] [<score1>, ... <score4>] <bagger> <shocks_pulled> <opposing_shocks_pulled>
+```
+
+Example: `~ua L Mw [fred, adam, shadow, josh] [86, 78, 68, 65] fusion 6 6`
