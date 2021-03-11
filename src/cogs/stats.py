@@ -42,7 +42,7 @@ class Stats(commands.Cog):
     @staticmethod
     def parse_pairs(input: str) -> Tuple[str, list]:
         pairlist = []
-        regex = r"^(?P<result>W|w|L|l)\s+\[(?P<player1>\w+),\s+(?P<player2>\w+),\s+(?P<player3>\w+),\s+(?P<player4>\w+),\s+(?P<player5>\w+)\]$"
+        regex = r"^(?P<result>W|w|L|l|T|t)\s+\[(?P<player1>\w+),\s+(?P<player2>\w+),\s+(?P<player3>\w+),\s+(?P<player4>\w+),\s+(?P<player5>\w+)\]$"
         match_list = re.findall(regex, input)
         if not match_list:
             raise commands.BadArgument
@@ -70,8 +70,6 @@ class Stats(commands.Cog):
             match_list = list(match_list[0])
 
         player = match_list[0].lower()
-        if player not in Stats.PLAYERS:
-            raise commands.BadArgument
         date = datetime.fromtimestamp(int(time.time())).isoformat()
         team = match_list[1]
         our_shocks = int(match_list[2])
@@ -81,7 +79,7 @@ class Stats(commands.Cog):
     @staticmethod
     def parse_all(arg: str) -> Tuple[str, str, str, str]:
         regex = (
-            r'^(?P<result>W|w|L|l)\s+(?P<team>.+)\s+\[(?P<runner1>\w+),\s+(?P<runner2>\w+),\s+(?P<runner3>\w+),\s+(?P<runner4>\w+)\]\s+'
+            r'^(?P<result>W|w|L|l|T|t)\s+(?P<team>.+)\s+\[(?P<runner1>\w+),\s+(?P<runner2>\w+),\s+(?P<runner3>\w+),\s+(?P<runner4>\w+)\]\s+'
             r'\[(?P<score1>\d{2,3}),\s+(?P<score2>\d{2,3}),\s+(?P<score3>\d{2,3}),\s+(?P<score4>\d{2,3})\]\s+'
             r'(?P<bagger>\w+)\s+(?P<shocks_pulled>\d+)\s+(?P<opponent_shocks>\d+)$')
         match = re.match(regex, arg)
@@ -116,7 +114,8 @@ class Stats(commands.Cog):
         sql_string = """select *
                         from IndivStats 
                         where Player=?
-                        limit 10"""
+                        order by Date desc
+                        limit 20"""
 
         self.cur.execute(sql_string, (player,))
         rows = self.cur.fetchall()
@@ -194,7 +193,8 @@ class Stats(commands.Cog):
         sql_string = """select *
                         from BaggerStats 
                         where Player=?
-                        limit 10"""
+                        order by Date desc
+                        limit 20"""
 
         self.cur.execute(sql_string, (player,))
         rows = self.cur.fetchall()
@@ -225,15 +225,15 @@ class Stats(commands.Cog):
     async def getwars(self, ctx: discord.ext.commands.Context, team: str=None):
         """Gets the war record against a team. You can provide a tag, or no arguments to get the first 10 records."""
         if team:
-            sql_string = """select Team, Wins, Losses, (Wins*1.0/(Wins+Losses))
+            sql_string = """select Team, Wins, Losses, Ties, (Wins*1.0/(Wins+Losses))
                             from WarStats WS
                             where WS.Team=? and Wins+Losses != 0"""
             self.cur.execute(sql_string, (team,))
         else:
-            sql_string = """select Team, Wins, Losses, (Wins*1.0/(Wins+Losses))
+            sql_string = """select Team, Wins, Losses, Ties, (Wins*1.0/(Wins+Losses))
                             from WarStats WS
                             where Wins+Losses != 0
-                            limit 10"""
+                            limit 20"""
             self.cur.execute(sql_string)
 
         rows = self.cur.fetchall()
@@ -244,13 +244,14 @@ class Stats(commands.Cog):
         t = "Team"
         w = "Wins"
         l = "Losses"
+        ties = "Ties"
         r = "W/L Ratio"
         msg = f"```Record vs {team}:\n\n" if team else f"```Latest records:\n\n"
-        msg += f"{t:<8}|{w:^6}|{l:^12}|{r:^12}\n"
-        msg += '-' * 38 + '\n'
+        msg += f"{t:<8}|{w:^6}|{l:^12}|{ties:^12}|{r:^12}\n"
+        msg += '-' * 50 + '\n'
 
         for row in rows:
-            msg += f"{row[0]:<8}|{row[1]:^6}|{row[2]:^12}|{row[3]:^12.2%}\n"
+            msg += f"{row[0]:<8}|{row[1]:^6}|{row[2]:^12}|{row[3]:^12}|{row[4]:^12.2%}\n"
 
         msg.rstrip()
         msg += "```"
@@ -268,7 +269,8 @@ class Stats(commands.Cog):
         for key in parsed:
             if key == 'opposing_team':
                 continue
-            msg += f"**{key+':':<15} **{parsed[key]:>8}\n"
+            bolded = '**'+key+'**'
+            msg += f"{bolded:<17}{parsed[key]:>15}\n"
         msg.strip()
         await ctx.channel.send(msg)
         await ctx.channel.send('Does this information look correct? (y/n)')
@@ -300,9 +302,11 @@ class Stats(commands.Cog):
     @commands.max_concurrency(1)
     @commands.has_role('Reporter')
     async def updatepairs(self, ctx: discord.ext.commands.Context, *, arg: str):
-        """Updates the pair database. This is only for MKPS players. Arguments should be W (or L) [<player1>, <player2>, <player3>, <player4>, <player5>]"""
+        """Updates the pair database. This is only for MKPS players. Arguments should be W/L/T [<player1>, <player2>, <player3>, <player4>, <player5>]"""
         (result, pairs) = self.parse_pairs(arg)
-        msg = "This will be reported as a **win**. Is that okay? (y/n)" if result.lower() == 'w' else "This will be reported as a **loss**. Is that okay? (y/n)"
+        msg = f"This will be reported as a **win** with these pairs. Is that okay? (y/n)" if result.lower() == 'w' \
+            else f"This will be reported as a **loss** with these pairs. Is that okay? (y/n)" if result.lower() == 'l' \
+            else f"This will be reported as a **tie** with these pairs. Is that okay? (y/n)"
         await ctx.channel.send(msg)
 
         def check(m: discord.Message):
@@ -320,9 +324,15 @@ class Stats(commands.Cog):
                                 where Pair = ?"""
                 for pair in pairs:
                     self.cur.execute(sql_string, (pair,))
-            else:
+            elif result.lower() == 'l':
                 sql_string = """update PairStats
                                 set Losses = Losses + 1
+                                where Pair = ?"""
+                for pair in pairs:
+                    self.cur.execute(sql_string, (pair,))
+            else:
+                sql_string = """update PairStats
+                                set Ties = Ties + 1
                                 where Pair = ?"""
                 for pair in pairs:
                     self.cur.execute(sql_string, (pair,))
@@ -338,6 +348,10 @@ class Stats(commands.Cog):
     async def updatebaggers(self, ctx: discord.ext.commands.Context, *, arg: str):
         """Updates the bagger database. Arguments should be <bagger name> <team> <shocks obtained> <opponent shocks obtained>"""
         (player, date, team, our_shocks, their_shocks) = self.parse_bagger(arg)
+        if player not in Stats.PLAYERS:
+            await ctx.channel.send(f"{player} isn't in the roster. Ignoring...")
+            return
+
         msg = f"{player}'s shock count vs {team} this war was {our_shocks}-{their_shocks}. Does that sound correct? (y/n)"
         await ctx.channel.send(msg)
 
@@ -362,15 +376,17 @@ class Stats(commands.Cog):
     @commands.max_concurrency(1)
     @commands.has_role('Reporter')
     async def updatewars(self, ctx: discord.ext.commands.Context, *, arg: str):
-        """Updates the war record. Syntax is <opposing_team_tag> <W/L>"""
-        regex = r"(?P<team>\S+)\s+(?P<result>W|w|L|l)"
+        """Updates the war record. Syntax is <opposing_team_tag> <W/L/T>"""
+        regex = r"(?P<team>\S+)\s+(?P<result>W|L|l|T|t)"
         match = re.match(regex, arg)
         if not match:
             raise commands.BadArgument
         team = match.group('team')
         result = match.group('result')
 
-        msg = f"This will be reported as a **win** against {team}. Is that okay? (y/n)" if result.lower() == 'w' else f"This will be reported as a **loss** against {team}. Is that okay? (y/n)"
+        msg = f"This will be reported as a **win** against {team}. Is that okay? (y/n)" if result.lower() == 'w' \
+              else f"This will be reported as a **loss** against {team}. Is that okay? (y/n)" if result.lower() == 'l' \
+              else f"This will be reported as a **tie** against {team}. Is that okay? (y/n)"
         await ctx.channel.send(msg)
 
         def check(m: discord.Message):
@@ -382,15 +398,20 @@ class Stats(commands.Cog):
                 return
             await ctx.channel.send('Ok, updating...')
             if result.lower() == 'w':
-                sql_string = """insert into WarStats(Team, Wins, Losses) 
-                                values(?, ?, ?) 
+                sql_string = """insert into WarStats(Team, Wins, Losses, Ties) 
+                                values(?, ?, ?, ?) 
                                 on conflict(Team) do update set Wins = Wins + 1"""
-                self.cur.execute(sql_string, (team,1,0))
-            else:
-                sql_string = """insert into WarStats(Team, Wins, Losses) 
-                                values(?, ?, ?) 
+                self.cur.execute(sql_string, (team, 1, 0, 0))
+            elif result.lower() == 'l':
+                sql_string = """insert into WarStats(Team, Wins, Losses, Ties) 
+                                values(?, ?, ?, ?) 
                                 on conflict(Team) do update set Losses = Losses + 1"""
-                self.cur.execute(sql_string, (team, 0, 1))
+                self.cur.execute(sql_string, (team, 0, 1, 0))
+            else:
+                sql_string = """insert into WarStats(Team, Wins, Losses, Ties) 
+                                values(?, ?, ?, ?) 
+                                on conflict(Team) do update set Ties = Ties + 1"""
+                self.cur.execute(sql_string, (team, 0, 0, 1))
             self.con.commit()
             await ctx.channel.send('Updated')
         except asyncio.TimeoutError:
