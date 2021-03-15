@@ -12,8 +12,8 @@ class Stats(commands.Cog):
 
     PLAYERS = ['adam', 'ais', 'chilly', 'chris', 'fred',
                'fusion', 'jazz', 'josh', 'jsully', 'kenzo',
-               'kt', 'maq', 'pringle', 'sam', 'shadow', 'swampy',
-               'thunder', 'verley', 'yasu', 'yuna']
+               'kt', 'maq', 'pringle', 'ruko', 'sam', 'shadow',
+               'swampy', 'thunder', 'verley', 'yasu', 'yuna']
 
     def __init__(self, bot):
         self.bot = bot
@@ -107,15 +107,11 @@ class Stats(commands.Cog):
     async def getindivs(self, ctx: discord.ext.commands.Context, player: str):
         """Retrieves indiv scores of a player. Argument should just be a player name."""
         player = player.lower()
-        if player not in Stats.PLAYERS:
-            await ctx.channel.send(f"{player} is not in the roster.")
-            return
-
-        sql_string = """select *
-                        from IndivStats 
-                        where Player=?
-                        order by Date desc
-                        limit 20"""
+        sql_string = """select I.Player, I.Date, I.Team, I.Score, W.Win, W.Loss
+                        from IndivStats I, WarStats W
+                        where Player=? and I.WarID = W.WarID
+                        order by I.Date desc
+                        limit 25"""
 
         self.cur.execute(sql_string, (player,))
         rows = self.cur.fetchall()
@@ -124,18 +120,29 @@ class Stats(commands.Cog):
             await ctx.channel.send("This player doesn't have any wars in the database.")
             return
 
+        wins = 0
+        losses = 0
+        average = 0
         t = "Team"
         d = "Date"
         s = "Score"
+        r = "Result"
         msg = f"```{player}'s indivs over the last {len(rows)} wars:\n\n"
-        msg += f"{d:<13}|{t:^8}|{s:^8}\n"
-        msg += '-'*29 + '\n'
+        msg += f"{d:<13}|{t:^8}|{s:^8}|{r:^8}\n"
+        msg += '-'*38 + '\n'
 
         for row in rows:
+            average += row[3]
+            wins += row[4]
+            losses += row[5]
             truncated_date = row[1].split('T')[0]
-            msg += f"{truncated_date:<13}|{row[2]:^8}|{row[3]:^8}\n"
+            result = 'W' if row[4] else 'L' if row[5] else 'T'
+            msg += f"{truncated_date:<13}|{row[2]:^8}|{row[3]:^8}|{result:^8}\n"
 
         msg.rstrip()
+        average /= len(rows)
+        msg += f"\n\nAverage: {average:.2f}\n"
+        msg += f"W/L Ratio: {wins/(wins+losses):.2%}"
         msg += "```"
         await ctx.channel.send(msg)
         return
@@ -186,15 +193,12 @@ class Stats(commands.Cog):
     @commands.guild_only()
     async def getbagger(self, ctx: discord.ext.commands.Context, player: str):
         """Retrieves bagger scores of a player. Argument should just be a player name."""
-        if player.lower() not in Stats.PLAYERS:
-            await ctx.channel.send(f"{player} is not in the roster.")
-            return
 
-        sql_string = """select *
-                        from BaggerStats 
-                        where Player=?
-                        order by Date desc
-                        limit 20"""
+        sql_string = """select B.Player, B.Date, B.Team, B.OurShocks, B.TheirShocks, W.Win, W.Loss
+                        from BaggerStats B, WarStats W
+                        where Player=? AND B.WarID = W.WarID
+                        order by B.Date desc
+                        limit 25"""
 
         self.cur.execute(sql_string, (player,))
         rows = self.cur.fetchall()
@@ -203,19 +207,33 @@ class Stats(commands.Cog):
             await ctx.channel.send("This player doesn't have any bagger data in the database.")
             return
 
+        wins = 0
+        losses = 0
+        total_wars = 0
+        average = 0
         t = "Team"
         d = "Date"
         s = "Shocks"
         o = "Opponent Shocks"
-        msg = f"```{player}'s bagging record over the last {len(rows)} wars:\n\n"
-        msg += f"{d:<13}|{t:^8}|{s:^14}|{o:^20}\n"
-        msg += '-' * 61 + '\n'
+        r = "Result"
+        msg = f"```{player}'s bagging record over the last {len(rows)} wars (0-0 means count was unknown):\n\n"
+        msg += f"{d:<13}|{t:^8}|{s:^10}|{o:^17}|{r:^8}\n"
+        msg += '-' * 58 + '\n'
 
         for row in rows:
             truncated_date = row[1].split('T')[0]
-            msg += f"{truncated_date:<13}|{row[2]:^8}|{row[3]:^14}|{row[4]:^20}\n"
+            result = 'W' if row[5] else 'L' if row[6] else 'T'
+            wins += row[5]
+            losses += row[6]
+            if row[3] != 0 and row[4] != 0:
+                total_wars += 1
+            average += row[3]
+            msg += f"{truncated_date:<13}|{row[2]:^8}|{row[3]:^10}|{row[4]:^17}|{result:^8}\n"
 
         msg.rstrip()
+        average /= total_wars
+        msg += f"\n\nAverage: {average:.2f}\n"
+        msg += f"W/L Ratio: {wins / (wins + losses):.2%}"
         msg += "```"
         await ctx.channel.send(msg)
         return
@@ -225,15 +243,16 @@ class Stats(commands.Cog):
     async def getwars(self, ctx: discord.ext.commands.Context, team: str=None):
         """Gets the war record against a team. You can provide a tag, or no arguments to get the first 10 records."""
         if team:
-            sql_string = """select Team, Wins, Losses, Ties, (Wins*1.0/(Wins+Losses))
+            sql_string = """select Date, Team, Win, Loss, Tie, WarID
                             from WarStats WS
-                            where WS.Team=? and Wins+Losses != 0"""
+                            where WS.Team=?
+                            order by Date desc"""
             self.cur.execute(sql_string, (team,))
         else:
-            sql_string = """select Team, Wins, Losses, Ties, (Wins*1.0/(Wins+Losses))
+            sql_string = """select Date, Team, Win, Loss, Tie, WarID
                             from WarStats WS
-                            where Wins+Losses != 0
-                            limit 20"""
+                            order by Date desc
+                            limit 25"""
             self.cur.execute(sql_string)
 
         rows = self.cur.fetchall()
@@ -241,19 +260,28 @@ class Stats(commands.Cog):
             await ctx.channel.send("No record found.")
             return
 
+        wins = 0
+        losses = 0
+        ties = 0
+        w = "War ID"
+        d = "Date"
         t = "Team"
-        w = "Wins"
-        l = "Losses"
-        ties = "Ties"
-        r = "W/L Ratio"
+        res = "Result"
         msg = f"```Record vs {team}:\n\n" if team else f"```Latest records:\n\n"
-        msg += f"{t:<8}|{w:^6}|{l:^12}|{ties:^12}|{r:^12}\n"
-        msg += '-' * 50 + '\n'
+        msg += f"{w:<10}|{d:^15}|{t:^9}|{res:^8}\n"
+        msg += '-' * 42 + '\n'
 
         for row in rows:
-            msg += f"{row[0]:<8}|{row[1]:^6}|{row[2]:^12}|{row[3]:^12}|{row[4]:^12.2%}\n"
+            result = 'W' if row[2] else 'L' if row[3] else 'T'
+            wins += row[2]
+            losses += row[3]
+            ties += row[4]
+            truncated_date = row[0].split('T')[0]
+            msg += f"{row[5]:<10}|{truncated_date:^15}|{row[1]:^9}|{result:^8}\n"
 
-        msg.rstrip()
+        msg += '\n'
+        msg += f"Record: {wins} - {ties} - {losses}\n"
+        msg += f"W/L Ratio: {wins/(wins+losses):.2%}"
         msg += "```"
         await ctx.channel.send(msg)
         return
@@ -262,16 +290,16 @@ class Stats(commands.Cog):
     @commands.guild_only()
     @commands.max_concurrency(1)
     @commands.has_role('Reporter')
-    async def updateindivs(self, ctx: discord.ext.commands.Context, *, arg: str):
-        """Updates the indiv database. Arguments should be <opposing team tag> [<runner1>, <runner2>, <runner3>, <runner4>] [<score1>, <score2>, <score3>, <score4>]"""
+    async def updateindivs(self, ctx: discord.ext.commands.Context, war_id: int, *, arg: str):
+        """Updates the indiv database. Arguments should be <war_id> <opposing team tag> [<runner1>, <runner2>, <runner3>, <runner4>] [<score1>, <score2>, <score3>, <score4>]"""
         parsed = self.parse_ui(arg)
-        msg = f"**Runner Scores vs {parsed['opposing_team']}**\n\n"
+        msg = f"```Runner Scores vs {parsed['opposing_team']}\n\n"
         for key in parsed:
             if key == 'opposing_team':
                 continue
-            bolded = '**'+key+'**'
-            msg += f"{bolded:<17}{parsed[key]:>15}\n"
+            msg += f"{key:<12}{parsed[key]:>12}\n"
         msg.strip()
+        msg += '```'
         await ctx.channel.send(msg)
         await ctx.channel.send('Does this information look correct? (y/n)')
 
@@ -287,11 +315,8 @@ class Stats(commands.Cog):
             for key in parsed:
                 if key == 'opposing_team':
                     continue
-                if key not in Stats.PLAYERS:
-                    await ctx.channel.send(f"{key} is not in the roster. Ignoring...")
-                    continue
                 date = datetime.fromtimestamp(int(time.time())).isoformat()
-                self.cur.execute("""INSERT INTO IndivStats VALUES (?, ?, ?, ?);""", (key, date, parsed['opposing_team'], parsed[key]))
+                self.cur.execute("""INSERT INTO IndivStats VALUES (?, ?, ?, ?, ?);""", (war_id, key, date, parsed['opposing_team'], parsed[key]))
             self.con.commit()
             await ctx.channel.send('Updated.')
         except asyncio.TimeoutError:
@@ -345,8 +370,8 @@ class Stats(commands.Cog):
     @commands.guild_only()
     @commands.max_concurrency(1)
     @commands.has_role('Reporter')
-    async def updatebaggers(self, ctx: discord.ext.commands.Context, *, arg: str):
-        """Updates the bagger database. Arguments should be <bagger name> <team> <shocks obtained> <opponent shocks obtained>"""
+    async def updatebaggers(self, ctx: discord.ext.commands.Context, war_id: int, *, arg: str):
+        """Updates the bagger database. Arguments should be <war_id> <bagger name> <team> <shocks obtained> <opponent shocks obtained>"""
         (player, date, team, our_shocks, their_shocks) = self.parse_bagger(arg)
         if player not in Stats.PLAYERS:
             await ctx.channel.send(f"{player} isn't in the roster. Ignoring...")
@@ -364,8 +389,8 @@ class Stats(commands.Cog):
                 return
             await ctx.channel.send('Ok, updating...')
             sql_string = """insert into BaggerStats
-                            values (?, ?, ?, ?, ?)"""
-            self.cur.execute(sql_string, (player, date, team, our_shocks, their_shocks))
+                            values (?, ?, ?, ?, ?, ?)"""
+            self.cur.execute(sql_string, (war_id, player, date, team, our_shocks, their_shocks))
             self.con.commit()
             await ctx.channel.send("Updated.")
         except asyncio.TimeoutError:
@@ -375,9 +400,9 @@ class Stats(commands.Cog):
     @commands.guild_only()
     @commands.max_concurrency(1)
     @commands.has_role('Reporter')
-    async def updatewars(self, ctx: discord.ext.commands.Context, *, arg: str):
+    async def updatewars(self, ctx: discord.ext.commands.Context, *, arg: str) -> int:
         """Updates the war record. Syntax is <opposing_team_tag> <W/L/T>"""
-        regex = r"(?P<team>\S+)\s+(?P<result>W|L|l|T|t)"
+        regex = r"(?P<team>\S+)\s+(?P<result>W|w|L|l|T|t)"
         match = re.match(regex, arg)
         if not match:
             raise commands.BadArgument
@@ -395,25 +420,22 @@ class Stats(commands.Cog):
             msg = await self.bot.wait_for('message', check=check, timeout=30.0)
             if msg.content.lower() == 'n':
                 await ctx.channel.send('Ok, ignoring...')
-                return
+                return -1
             await ctx.channel.send('Ok, updating...')
+            sql_string = """insert into WarStats(Team, Date, Win, Loss, Tie) 
+                            values(?, ?, ?, ?, ?)"""
+            date = datetime.fromtimestamp(int(time.time())).isoformat()
             if result.lower() == 'w':
-                sql_string = """insert into WarStats(Team, Wins, Losses, Ties) 
-                                values(?, ?, ?, ?) 
-                                on conflict(Team) do update set Wins = Wins + 1"""
-                self.cur.execute(sql_string, (team, 1, 0, 0))
+                self.cur.execute(sql_string, (team, date, 1, 0, 0))
             elif result.lower() == 'l':
-                sql_string = """insert into WarStats(Team, Wins, Losses, Ties) 
-                                values(?, ?, ?, ?) 
-                                on conflict(Team) do update set Losses = Losses + 1"""
-                self.cur.execute(sql_string, (team, 0, 1, 0))
+                self.cur.execute(sql_string, (team, date, 0, 1, 0))
             else:
-                sql_string = """insert into WarStats(Team, Wins, Losses, Ties) 
-                                values(?, ?, ?, ?) 
-                                on conflict(Team) do update set Ties = Ties + 1"""
-                self.cur.execute(sql_string, (team, 0, 0, 1))
+                self.cur.execute(sql_string, (team, date, 0, 0, 1))
             self.con.commit()
+            self.cur.execute("select max(WarID) from WarStats")
+            row = self.cur.fetchone()
             await ctx.channel.send('Updated')
+            return row[0]
         except asyncio.TimeoutError:
             pass
 
@@ -424,11 +446,24 @@ class Stats(commands.Cog):
     async def updateall(self, ctx: discord.ext.commands.Context, *, arg: str):
         """Updates everything at once. Syntax is complex. Check https://github.com/akyuus/FlanBot for an example."""
         (indiv_arg, pair_arg, bagger_arg, war_arg) = self.parse_all(arg)
-        await self.updateindivs(ctx, arg=indiv_arg)
+        war_id = await self.updatewars(ctx, arg=war_arg)
+        await self.updateindivs(ctx, war_id=war_id, arg=indiv_arg)
         await self.updatepairs(ctx, arg=pair_arg)
-        await self.updatebaggers(ctx, arg=bagger_arg)
-        await self.updatewars(ctx, arg=war_arg)
+        await self.updatebaggers(ctx, war_id=war_id, arg=bagger_arg)
         return
+
+
+#    @commands.command(aliases=['init_w'])
+#    @commands.guild_only()
+#    @commands.has_role('Reporter')
+#    async def initialize_wars(self, ctx):
+#        """Initializes the war database. This is just for prototyping."""
+#        update_string = """update WarStats
+#                           set Win = 1
+#                               Loss = 0
+#                               Tie = 0"""
+#        self.cur.execute(update_string)
+#        self.con.commit()
 
     @commands.command(aliases=['init'])
     @commands.guild_only()
@@ -439,7 +474,7 @@ class Stats(commands.Cog):
                           from PairStats
                           where Pair = ?"""
         insert_string = """insert into PairStats
-                           values (?, ?, ?)"""
+                           values (?, ?, ?, ?)"""
         pairlist = []
         for i in range(len(Stats.PLAYERS)):
             for k in range(i+1, len(Stats.PLAYERS)):
@@ -450,7 +485,7 @@ class Stats(commands.Cog):
             self.cur.execute(check_string, (pair,))
             check = self.cur.fetchall()
             if not check:
-                self.cur.execute(insert_string, (pair, 0, 0))
+                self.cur.execute(insert_string, (pair, 0, 0, 0))
         self.con.commit()
         await ctx.channel.send('Done.')
 
