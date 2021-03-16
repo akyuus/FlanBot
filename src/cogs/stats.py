@@ -3,6 +3,7 @@ import sqlite3
 import re
 import asyncio
 import time
+import json
 from typing import Tuple
 from datetime import datetime
 from discord.ext import commands
@@ -10,15 +11,15 @@ from discord.ext import commands
 
 class Stats(commands.Cog):
 
-    PLAYERS = ['adam', 'ais', 'chilly', 'chris', 'fred',
-               'fusion', 'jazz', 'josh', 'jsully', 'kenzo',
-               'kt', 'maq', 'pringle', 'ruko', 'sam', 'shadow',
-               'swampy', 'thunder', 'verley', 'yasu', 'yuna']
-
     def __init__(self, bot):
         self.bot = bot
-        self.con = sqlite3.connect(r'C:\Users\akyuu\PycharmProjects\SakuraStatistics\sakura.db')
-        self.cur = self.con.cursor()
+        with open(r'C:\Users\akyuu\PycharmProjects\SakuraStatistics\src\cogs\teams.json') as f:
+            team_data = json.load(f)
+        self.connections = {}
+        self.players = {}
+        for key in team_data:
+            self.connections[int(key)] = sqlite3.connect(team_data[key]['connection_string'])
+            self.players[int(key)] = team_data[key]['players']
 
     @staticmethod
     def parse_ui(input: str) -> dict:
@@ -39,8 +40,7 @@ class Stats(commands.Cog):
 
         return parsed
 
-    @staticmethod
-    def parse_pairs(input: str) -> Tuple[str, list]:
+    def parse_pairs(self, input: str, id: int) -> Tuple[str, list]:
         pairlist = []
         regex = r"^(?P<result>W|w|L|l|T|t)\s+\[(?P<player1>\w+),\s+(?P<player2>\w+),\s+(?P<player3>\w+),\s+(?P<player4>\w+),\s+(?P<player5>\w+)\]$"
         match_list = re.findall(regex, input)
@@ -54,7 +54,7 @@ class Stats(commands.Cog):
         player_list.sort()
         for i in range(len(player_list)):
             for k in range(i+1,len(player_list)):
-                if player_list[i].lower() not in Stats.PLAYERS or player_list[k].lower() not in Stats.PLAYERS:
+                if player_list[i].lower() not in self.players[id] or player_list[k].lower() not in self.players[id]:
                     continue
                 pairlist.append(f"{player_list[i].lower()} and {player_list[k].lower()}")
         print(pairlist)
@@ -113,8 +113,10 @@ class Stats(commands.Cog):
                         order by I.Date desc
                         limit 25"""
 
-        self.cur.execute(sql_string, (player,))
-        rows = self.cur.fetchall()
+        con = self.connections[ctx.guild.id]
+        cur = con.cursor()
+        cur.execute(sql_string, (player,))
+        rows = cur.fetchall()
 
         if not rows:
             await ctx.channel.send("This player doesn't have any wars in the database.")
@@ -151,6 +153,7 @@ class Stats(commands.Cog):
     @commands.guild_only()
     async def getpairs(self, ctx: discord.ext.commands.Context, player1: str, player2: str):
         """Retrieves pair data for two players. Argument should be two players in the roster."""
+        roster = self.players[ctx.guild.id]
         player1 = player1.lower()
         player2 = player2.lower()
         if player2 < player1:
@@ -159,7 +162,7 @@ class Stats(commands.Cog):
             player1 = tmp
 
         pair = f"{player1} and {player2}"
-        if player1 not in Stats.PLAYERS or player2 not in Stats.PLAYERS:
+        if player1 not in roster or player2 not in roster:
             await ctx.channel.send(f"One or more of these players is not in the roster.")
             return
 
@@ -167,8 +170,10 @@ class Stats(commands.Cog):
                         from PairStats 
                         where Pair=? and Wins+Losses != 0"""
 
-        self.cur.execute(sql_string, (pair,))
-        rows = self.cur.fetchall()
+        con = self.connections[ctx.guild.id]
+        cur = con.cursor()
+        cur.execute(sql_string, (pair,))
+        rows = cur.fetchall()
 
         if not rows:
             await ctx.channel.send("These players do not have a recorded war in the database.")
@@ -200,8 +205,10 @@ class Stats(commands.Cog):
                         order by B.Date desc
                         limit 25"""
 
-        self.cur.execute(sql_string, (player,))
-        rows = self.cur.fetchall()
+        con = self.connections[ctx.guild.id]
+        cur = con.cursor()
+        cur.execute(sql_string, (player,))
+        rows = cur.fetchall()
 
         if not rows:
             await ctx.channel.send("This player doesn't have any bagger data in the database.")
@@ -242,20 +249,22 @@ class Stats(commands.Cog):
     @commands.guild_only()
     async def getwars(self, ctx: discord.ext.commands.Context, team: str=None):
         """Gets the war record against a team. You can provide a tag, or no arguments to get the first 10 records."""
+        con = self.connections[ctx.guild.id]
+        cur = con.cursor()
         if team:
             sql_string = """select Date, Team, Win, Loss, Tie, WarID
                             from WarStats WS
                             where WS.Team=?
                             order by Date desc"""
-            self.cur.execute(sql_string, (team,))
+            cur.execute(sql_string, (team,))
         else:
             sql_string = """select Date, Team, Win, Loss, Tie, WarID
                             from WarStats WS
                             order by Date desc
                             limit 25"""
-            self.cur.execute(sql_string)
+            cur.execute(sql_string)
 
-        rows = self.cur.fetchall()
+        rows = cur.fetchall()
         if not rows:
             await ctx.channel.send("No record found.")
             return
@@ -312,12 +321,14 @@ class Stats(commands.Cog):
                 await ctx.channel.send('Ok, ignoring...')
                 return
             await ctx.channel.send("Ok, updating...")
+            con = self.connections[ctx.guild.id]
+            cur = con.cursor()
             for key in parsed:
                 if key == 'opposing_team':
                     continue
                 date = datetime.fromtimestamp(int(time.time())).isoformat()
-                self.cur.execute("""INSERT INTO IndivStats VALUES (?, ?, ?, ?, ?);""", (war_id, key, date, parsed['opposing_team'], parsed[key]))
-            self.con.commit()
+                cur.execute("""INSERT INTO IndivStats VALUES (?, ?, ?, ?, ?);""", (war_id, key, date, parsed['opposing_team'], parsed[key]))
+            con.commit()
             await ctx.channel.send('Updated.')
         except asyncio.TimeoutError:
             pass
@@ -328,7 +339,7 @@ class Stats(commands.Cog):
     @commands.has_role('Reporter')
     async def updatepairs(self, ctx: discord.ext.commands.Context, *, arg: str):
         """Updates the pair database. This is only for MKPS players. Arguments should be W/L/T [<player1>, <player2>, <player3>, <player4>, <player5>]"""
-        (result, pairs) = self.parse_pairs(arg)
+        (result, pairs) = self.parse_pairs(arg, ctx.guild.id)
         msg = f"This will be reported as a **win** with these pairs. Is that okay? (y/n)" if result.lower() == 'w' \
             else f"This will be reported as a **loss** with these pairs. Is that okay? (y/n)" if result.lower() == 'l' \
             else f"This will be reported as a **tie** with these pairs. Is that okay? (y/n)"
@@ -343,25 +354,27 @@ class Stats(commands.Cog):
                 await ctx.channel.send('Ok, ignoring...')
                 return
             await ctx.channel.send("Ok, updating...")
+            con = self.connections[ctx.guild.id]
+            cur = con.cursor()
             if result.lower() == 'w':
                 sql_string = """update PairStats
                                 set Wins = Wins + 1
                                 where Pair = ?"""
                 for pair in pairs:
-                    self.cur.execute(sql_string, (pair,))
+                    cur.execute(sql_string, (pair,))
             elif result.lower() == 'l':
                 sql_string = """update PairStats
                                 set Losses = Losses + 1
                                 where Pair = ?"""
                 for pair in pairs:
-                    self.cur.execute(sql_string, (pair,))
+                    cur.execute(sql_string, (pair,))
             else:
                 sql_string = """update PairStats
                                 set Ties = Ties + 1
                                 where Pair = ?"""
                 for pair in pairs:
-                    self.cur.execute(sql_string, (pair,))
-            self.con.commit()
+                    cur.execute(sql_string, (pair,))
+            con.commit()
             await ctx.channel.send('Updated.')
         except asyncio.TimeoutError:
             pass
@@ -373,9 +386,6 @@ class Stats(commands.Cog):
     async def updatebaggers(self, ctx: discord.ext.commands.Context, war_id: int, *, arg: str):
         """Updates the bagger database. Arguments should be <war_id> <bagger name> <team> <shocks obtained> <opponent shocks obtained>"""
         (player, date, team, our_shocks, their_shocks) = self.parse_bagger(arg)
-        if player not in Stats.PLAYERS:
-            await ctx.channel.send(f"{player} isn't in the roster. Ignoring...")
-            return
 
         msg = f"{player}'s shock count vs {team} this war was {our_shocks}-{their_shocks}. Does that sound correct? (y/n)"
         await ctx.channel.send(msg)
@@ -390,8 +400,10 @@ class Stats(commands.Cog):
             await ctx.channel.send('Ok, updating...')
             sql_string = """insert into BaggerStats
                             values (?, ?, ?, ?, ?, ?)"""
-            self.cur.execute(sql_string, (war_id, player, date, team, our_shocks, their_shocks))
-            self.con.commit()
+            con = self.connections[ctx.guild.id]
+            cur = con.cursor()
+            cur.execute(sql_string, (war_id, player, date, team, our_shocks, their_shocks))
+            con.commit()
             await ctx.channel.send("Updated.")
         except asyncio.TimeoutError:
             pass
@@ -422,18 +434,20 @@ class Stats(commands.Cog):
                 await ctx.channel.send('Ok, ignoring...')
                 return -1
             await ctx.channel.send('Ok, updating...')
+            con = self.connections[ctx.guild.id]
+            cur = con.cursor()
             sql_string = """insert into WarStats(Team, Date, Win, Loss, Tie) 
                             values(?, ?, ?, ?, ?)"""
             date = datetime.fromtimestamp(int(time.time())).isoformat()
             if result.lower() == 'w':
-                self.cur.execute(sql_string, (team, date, 1, 0, 0))
+                cur.execute(sql_string, (team, date, 1, 0, 0))
             elif result.lower() == 'l':
-                self.cur.execute(sql_string, (team, date, 0, 1, 0))
+                cur.execute(sql_string, (team, date, 0, 1, 0))
             else:
-                self.cur.execute(sql_string, (team, date, 0, 0, 1))
-            self.con.commit()
-            self.cur.execute("select max(WarID) from WarStats")
-            row = self.cur.fetchone()
+                cur.execute(sql_string, (team, date, 0, 0, 1))
+            con.commit()
+            cur.execute("select max(WarID) from WarStats")
+            row = cur.fetchone()
             await ctx.channel.send('Updated')
             return row[0]
         except asyncio.TimeoutError:
@@ -468,7 +482,7 @@ class Stats(commands.Cog):
     @commands.command(aliases=['init'])
     @commands.guild_only()
     @commands.has_role('Reporter')
-    async def initialize_pairs(self, ctx):
+    async def initialize_pairs(self, ctx: discord.ext.commands.Context):
         """Initializes any new pairs in the database."""
         check_string = """select 1
                           from PairStats
@@ -476,17 +490,20 @@ class Stats(commands.Cog):
         insert_string = """insert into PairStats
                            values (?, ?, ?, ?)"""
         pairlist = []
-        for i in range(len(Stats.PLAYERS)):
-            for k in range(i+1, len(Stats.PLAYERS)):
-                pairlist.append(f"{Stats.PLAYERS[i]} and {Stats.PLAYERS[k]}")
+        roster = self.players[ctx.guild.id]
+        for i in range(len(roster)):
+            for k in range(i+1, len(roster)):
+                pairlist.append(f"{roster[i]} and {roster[k]}")
 
         await ctx.channel.send('Updating pair database...')
+        con = self.connections[ctx.guild.id]
+        cur = con.cursor()
         for pair in pairlist:
-            self.cur.execute(check_string, (pair,))
-            check = self.cur.fetchall()
+            cur.execute(check_string, (pair,))
+            check = cur.fetchall()
             if not check:
-                self.cur.execute(insert_string, (pair, 0, 0, 0))
-        self.con.commit()
+                cur.execute(insert_string, (pair, 0, 0, 0))
+        con.commit()
         await ctx.channel.send('Done.')
 
 
