@@ -22,10 +22,10 @@ class Stats(commands.Cog):
             self.players[int(key)] = team_data[key]['players']
 
     @staticmethod
-    def parse_ui(input: str) -> dict:
+    def parse_ui(arg: str) -> dict:
         parsed = {}
         regex = r"^(?P<team>.+)\s+\[(?P<runner1>\w+),*\s*(?P<runner2>\w+)*,*\s*(?P<runner3>\w+)*,*\s*(?P<runner4>\w+)*\]\s+\[(?P<score1>\d{2,3}),*\s*(?P<score2>\d{2,3})*,*\s*(?P<score3>\d{2,3})*,*\s*(?P<score4>\d{2,3})*\]$"
-        match = re.match(regex, input)
+        match = re.match(regex, arg)
         if not match:
             raise commands.BadArgument
 
@@ -40,10 +40,10 @@ class Stats(commands.Cog):
 
         return parsed
 
-    def parse_pairs(self, input: str, id: int) -> Tuple[str, list]:
+    def parse_pairs(self, arg: str, id: int) -> Tuple[str, list]:
         pairlist = []
         regex = r"^(?P<result>W|w|L|l|T|t)\s+\[(?P<player1>\w+),\s+(?P<player2>\w+),\s+(?P<player3>\w+),\s+(?P<player4>\w+),\s+(?P<player5>\w+)\]$"
-        match_list = re.findall(regex, input)
+        match_list = re.findall(regex, arg)
         if not match_list:
             raise commands.BadArgument
         else:
@@ -81,13 +81,14 @@ class Stats(commands.Cog):
         regex = (
             r'^(?P<result>W|w|L|l|T|t)\s+(?P<team>.+)\s+\[(?P<runner1>\w+),\s+(?P<runner2>\w+),\s+(?P<runner3>\w+),\s+(?P<runner4>\w+)\]\s+'
             r'\[(?P<score1>\d{2,3}),\s+(?P<score2>\d{2,3}),\s+(?P<score3>\d{2,3}),\s+(?P<score4>\d{2,3})\]\s+'
-            r'(?P<bagger>\w+)\s+(?P<shocks_pulled>\d+)\s+(?P<opponent_shocks>\d+)$')
+            r'(?P<bagger>\w+)\s+(?P<shocks_pulled>\d+)\s+(?P<opponent_shocks>\d+)\s*(?P<mkps>(?<=\s)mkps)?$')
         match = re.match(regex, arg)
         if not match:
             raise commands.BadArgument
 
         result = match.group('result')
         team = match.group('team')
+        mkps = match.group('mkps')
         runners = []
         scores = []
         for i in range(1, 5):
@@ -100,6 +101,8 @@ class Stats(commands.Cog):
         pair_arg = f"{result} [{', '.join(runners)}, {bagger}]"
         bagger_arg = f"{bagger} {team} {shocks_pulled} {opponent_shocks}"
         war_arg = f"{team} {result}"
+        if mkps:
+            war_arg += f" {mkps}"
         return indiv_arg, pair_arg, bagger_arg, war_arg
 
     @commands.command(aliases=['gi'])
@@ -207,7 +210,7 @@ class Stats(commands.Cog):
 
         con = self.connections[ctx.guild.id]
         cur = con.cursor()
-        cur.execute(sql_string, (player,))
+        cur.execute(sql_string, (player.lower(),))
         rows = cur.fetchall()
 
         if not rows:
@@ -232,13 +235,18 @@ class Stats(commands.Cog):
             result = 'W' if row[5] else 'L' if row[6] else 'T'
             wins += row[5]
             losses += row[6]
-            if row[3] != 0 and row[4] != 0:
+            if row[3] != 0 or row[4] != 0:
                 total_wars += 1
             average += row[3]
             msg += f"{truncated_date:<13}|{row[2]:^8}|{row[3]:^10}|{row[4]:^17}|{result:^8}\n"
 
         msg.rstrip()
-        average /= total_wars
+
+        try:
+            average /= total_wars
+        except ZeroDivisionError:
+            average = 0
+            pass
         msg += f"\n\nAverage: {average:.2f}\n"
         msg += f"W/L Ratio: {wins / (wins + losses):.2%}"
         msg += "```"
@@ -252,13 +260,13 @@ class Stats(commands.Cog):
         con = self.connections[ctx.guild.id]
         cur = con.cursor()
         if team:
-            sql_string = """select Date, Team, Win, Loss, Tie, WarID
+            sql_string = """select Date, Team, Win, Loss, Tie, WarID, MKPS
                             from WarStats WS
                             where WS.Team=?
                             order by Date desc"""
             cur.execute(sql_string, (team,))
         else:
-            sql_string = """select Date, Team, Win, Loss, Tie, WarID
+            sql_string = """select Date, Team, Win, Loss, Tie, WarID, MKPS
                             from WarStats WS
                             order by Date desc
                             limit 25"""
@@ -275,10 +283,11 @@ class Stats(commands.Cog):
         w = "War ID"
         d = "Date"
         t = "Team"
+        m = "MKPS?"
         res = "Result"
         msg = f"```Record vs {team}:\n\n" if team else f"```Latest records:\n\n"
-        msg += f"{w:<10}|{d:^15}|{t:^9}|{res:^8}\n"
-        msg += '-' * 42 + '\n'
+        msg += f"{w:<10}|{d:^15}|{t:^9}|{res:^8}|{m:^8}\n"
+        msg += '-' * 52 + '\n'
 
         for row in rows:
             result = 'W' if row[2] else 'L' if row[3] else 'T'
@@ -286,7 +295,8 @@ class Stats(commands.Cog):
             losses += row[3]
             ties += row[4]
             truncated_date = row[0].split('T')[0]
-            msg += f"{row[5]:<10}|{truncated_date:^15}|{row[1]:^9}|{result:^8}\n"
+            mkps = 'Yes' if row[6] else 'No'
+            msg += f"{row[5]:<10}|{truncated_date:^15}|{row[1]:^9}|{result:^8}|{mkps:^8}\n"
 
         msg += '\n'
         msg += f"Record: {wins} - {ties} - {losses}\n"
@@ -414,13 +424,13 @@ class Stats(commands.Cog):
     @commands.has_role('Reporter')
     async def updatewars(self, ctx: discord.ext.commands.Context, *, arg: str) -> int:
         """Updates the war record. Syntax is <opposing_team_tag> <W/L/T>"""
-        regex = r"(?P<team>\S+)\s+(?P<result>W|w|L|l|T|t)"
+        regex = r"(?P<team>\S+)\s+(?P<result>W|w|L|l|T|t)\s*(?P<mkps>(?<=\s)mkps)?"
         match = re.match(regex, arg)
         if not match:
             raise commands.BadArgument
         team = match.group('team')
         result = match.group('result')
-
+        mkps = match.group('mkps')
         msg = f"This will be reported as a **win** against {team}. Is that okay? (y/n)" if result.lower() == 'w' \
               else f"This will be reported as a **loss** against {team}. Is that okay? (y/n)" if result.lower() == 'l' \
               else f"This will be reported as a **tie** against {team}. Is that okay? (y/n)"
@@ -448,6 +458,10 @@ class Stats(commands.Cog):
             con.commit()
             cur.execute("select max(WarID) from WarStats")
             row = cur.fetchone()
+            if mkps:
+                await ctx.channel.send("This will be marked as an MKPS match.")
+                cur.execute("update WarStats set MKPS=? where WarID=?", (1, row[0]))
+                con.commit()
             await ctx.channel.send('Updated')
             return row[0]
         except asyncio.TimeoutError:

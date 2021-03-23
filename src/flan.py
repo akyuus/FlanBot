@@ -45,6 +45,9 @@ async def on_command_error(ctx, error: discord.ext.commands.CommandError):
     if isinstance(error, commands.MaxConcurrencyReached):
         await ctx.send("There is a pending update. Either let it timeout, or respond with 'n' to it to invoke another update.")
         return
+    if isinstance(error, commands.CommandInvokeError):
+        await ctx.send("Invoke error. This server probably isn't configured to use this bot.")
+        return
     raise error
 
 bot.run(token, bot=True, reconnect=True)
