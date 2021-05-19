@@ -4,7 +4,6 @@ import re
 import asyncio
 import time
 import json
-import math
 from typing import Tuple
 from datetime import datetime
 from discord.ext import commands
@@ -27,7 +26,7 @@ class Stats(commands.Cog):
 
     @staticmethod
     def add_check(message):
-        return lambda reaction, user : user == message.author and (str(reaction.emoji) == '➡' or str(reaction.emoji) == '⬅')
+        return lambda reaction, user: user == message.author and (str(reaction.emoji) == '➡' or str(reaction.emoji) == '⬅')
 
     @staticmethod
     def remove_check(message):
@@ -212,15 +211,23 @@ class Stats(commands.Cog):
 
         pair = f"{player1} and {player2}"
 
-        sql_string = """select I1.Player, I2.Player, SUM(WS.Win) as Wins, SUM(WS.Loss) as Losses, (Sum(WS.Win)*1.0)/(Sum(WS.Loss) + Sum(WS.Win)) as WL
-                        from (select * from IndivStats where Player = ?) I1,
-                        (select * from IndivStats where Player = ?) I2,
+        # there has to be a better way to do this lmao
+        sql_string = """select IFNULL(INDIV.Player1, BAGGER.Player1) as P1, IFNULL(BAGGER.Player2, INDIV.PLAYER2) as P2, (SUM(IFNULL(INDIV.Wins, 0)) + SUM(IFNULL(BAGGER.Wins, 0))) as Wins, (SUM(IFNULL(INDIV.Losses, 0)) + SUM(IFNULL(BAGGER.Losses, 0))) as Losses, (((SUM(IFNULL(INDIV.Wins, 0)) + SUM(IFNULL(BAGGER.Wins, 0)))*1.0)/(SUM(IFNULL(INDIV.Wins, 0)) + SUM(IFNULL(BAGGER.Wins, 0)) + SUM(IFNULL(INDIV.Losses, 0)) + SUM(IFNULL(BAGGER.Losses, 0)))) as WL
+                        from
+                        (select I1.Player as Player1, I2.Player as Player2, SUM(WS.Win) as Wins, SUM(WS.Loss) as Losses, (Sum(WS.Win)*1.0)/(Sum(WS.Loss) + Sum(WS.Win)) as WL
+                        from (select WarID, Player, IFNULL(Score, 0) from IndivStats where Player = ?) I1,
+                        (select WarID, Player, IFNULL(Score, 0) from IndivStats where Player = ?) I2,
                         WarStats WS
-                        WHERE I1.WarID = I2.WarID AND I1.WarID = WS.WarID"""
+                        WHERE I1.WarID = I2.WarID AND I1.WarID = WS.WarID) INDIV,
+                        (select I1.Player as Player1, I2.Player as Player2, SUM(WS.Win) as Wins, SUM(WS.Loss) as Losses, (Sum(WS.Win)*1.0)/(Sum(WS.Loss) + Sum(WS.Win)) as WL
+                        from (select * from IndivStats where Player = ? OR Player = ?) I1,
+                        (select * from BaggerStats where Player = ? OR Player = ?) I2,
+                        WarStats WS
+                        WHERE I1.WarID = I2.WarID AND I1.WarID = WS.WarID) BAGGER"""
 
         con = self.connections[ctx.guild.id]
         cur = con.cursor()
-        cur.execute(sql_string, (player1, player2))
+        cur.execute(sql_string, (player1, player2, player1, player2, player1, player2))
         rows = cur.fetchall()
 
         if rows[0][0] is None:
