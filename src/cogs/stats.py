@@ -4,6 +4,7 @@ import re
 import asyncio
 import time
 import json
+import math
 from typing import Tuple
 from datetime import datetime
 from discord.ext import commands
@@ -13,13 +14,24 @@ class Stats(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
-        with open(r'C:\Users\akyuu\PycharmProjects\SakuraStatistics\src\cogs\teams.json') as f:
-            team_data = json.load(f)
         self.connections = {}
         self.players = {}
+        self.refresh_fields()
+
+    def refresh_fields(self):
+        with open(r'C:\Users\akyuu\PycharmProjects\SakuraStatistics\src\cogs\teams.json') as f:
+            team_data = json.load(f)
         for key in team_data:
             self.connections[int(key)] = sqlite3.connect(team_data[key]['connection_string'])
             self.players[int(key)] = team_data[key]['players']
+
+    @staticmethod
+    def add_check(message):
+        return lambda reaction, user : user == message.author and (str(reaction.emoji) == '➡' or str(reaction.emoji) == '⬅')
+
+    @staticmethod
+    def remove_check(message):
+        return lambda reaction, user : user == message.author and str(reaction.emoji) == '⬅'
 
     @staticmethod
     def parse_ui(arg: str) -> dict:
@@ -114,7 +126,11 @@ class Stats(commands.Cog):
                         from IndivStats I, WarStats W
                         where Player=? and I.WarID = W.WarID
                         order by I.Date desc
-                        limit 25"""
+                        """
+        aggregate_string = """select (SUM(Score)*1.0)/COUNT(*) as average, SUM(W.Win) as Wins, SUM(W.Loss) as Losses
+                              from IndivStats I, WarStats W
+                              where Player=? and I.WarID = W.WarID
+                              order by I.Date desc"""
 
         con = self.connections[ctx.guild.id]
         cur = con.cursor()
@@ -125,9 +141,12 @@ class Stats(commands.Cog):
             await ctx.channel.send("This player doesn't have any wars in the database.")
             return
 
-        wins = 0
-        losses = 0
-        average = 0
+        cur.execute(aggregate_string, (player,))
+        aggregate = cur.fetchall()[0]
+        wins = aggregate[1]
+        losses = aggregate[2]
+        average = aggregate[0]
+
         t = "Team"
         d = "Date"
         s = "Score"
@@ -135,21 +154,48 @@ class Stats(commands.Cog):
         msg = f"```{player}'s indivs over the last {len(rows)} wars:\n\n"
         msg += f"{d:<13}|{t:^8}|{s:^8}|{r:^8}\n"
         msg += '-'*38 + '\n'
-
-        for row in rows:
-            average += row[3]
-            wins += row[4]
-            losses += row[5]
+        msg_header = (msg + '.')[:-1]
+        page_num = 0
+        page = rows[25*page_num:25*(page_num + 1)]
+        for row in page:
             truncated_date = row[1].split('T')[0]
             result = 'W' if row[4] else 'L' if row[5] else 'T'
             msg += f"{truncated_date:<13}|{row[2]:^8}|{row[3]:^8}|{result:^8}\n"
 
         msg.rstrip()
-        average /= len(rows)
         msg += f"\n\nAverage: {average:.2f}\n"
         msg += f"W/L Ratio: {wins/(wins+losses):.2%}"
         msg += "```"
-        await ctx.channel.send(msg)
+        sent_msg = await ctx.channel.send(msg)
+        await sent_msg.add_reaction("⬅")
+        await sent_msg.add_reaction("➡")
+
+        while True:
+            try:
+                reaction, user = await self.bot.wait_for('reaction_add', timeout=10.0, check=self.add_check(ctx.message))
+            except asyncio.TimeoutError:
+                break
+            else:
+                pages = len(rows)//25
+                if str(reaction.emoji) == '➡':
+                    page_num = min(page_num+1, pages)
+                else:
+                    page_num = max(page_num-1, 0)
+                print(page_num)
+                msg = msg_header
+                page = rows[25 * page_num:25 * (page_num + 1)]
+                if len(page) == 0:
+                    continue
+                for row in page:
+                    truncated_date = row[1].split('T')[0]
+                    result = 'W' if row[4] else 'L' if row[5] else 'T'
+                    msg += f"{truncated_date:<13}|{row[2]:^8}|{row[3]:^8}|{result:^8}\n"
+
+                msg.rstrip()
+                msg += f"\n\nAverage: {average:.2f}\n"
+                msg += f"W/L Ratio: {wins / (wins + losses):.2%}"
+                msg += "```"
+                await sent_msg.edit(content=msg)
         return
 
     @commands.command(aliases=['gp'])
@@ -165,20 +211,19 @@ class Stats(commands.Cog):
             player1 = tmp
 
         pair = f"{player1} and {player2}"
-        if player1 not in roster or player2 not in roster:
-            await ctx.channel.send(f"One or more of these players is not in the roster.")
-            return
 
-        sql_string = """select Wins, Losses, (Wins*1.0/(Wins+Losses))
-                        from PairStats 
-                        where Pair=? and Wins+Losses != 0"""
+        sql_string = """select I1.Player, I2.Player, SUM(WS.Win) as Wins, SUM(WS.Loss) as Losses, (Sum(WS.Win)*1.0)/(Sum(WS.Loss) + Sum(WS.Win)) as WL
+                        from (select * from IndivStats where Player = ?) I1,
+                        (select * from IndivStats where Player = ?) I2,
+                        WarStats WS
+                        WHERE I1.WarID = I2.WarID AND I1.WarID = WS.WarID"""
 
         con = self.connections[ctx.guild.id]
         cur = con.cursor()
-        cur.execute(sql_string, (pair,))
+        cur.execute(sql_string, (player1, player2))
         rows = cur.fetchall()
 
-        if not rows:
+        if rows[0][0] is None:
             await ctx.channel.send("These players do not have a recorded war in the database.")
             return
 
@@ -190,7 +235,7 @@ class Stats(commands.Cog):
         msg += '-' * 30 + '\n'
 
         for row in rows:
-            msg += f"{row[0]:<6}|{row[1]:^12}|{row[2]:^12.2%}\n"
+            msg += f"{row[2]:<6}|{row[3]:^12}|{row[4]:^12.2%}\n"
 
         msg.rstrip()
         msg += "```"
@@ -206,7 +251,7 @@ class Stats(commands.Cog):
                         from BaggerStats B, WarStats W
                         where Player=? AND B.WarID = W.WarID
                         order by B.Date desc
-                        limit 25"""
+                        """
 
         con = self.connections[ctx.guild.id]
         cur = con.cursor()
@@ -229,15 +274,21 @@ class Stats(commands.Cog):
         msg = f"```{player}'s bagging record over the last {len(rows)} wars (0-0 means count was unknown):\n\n"
         msg += f"{d:<13}|{t:^8}|{s:^10}|{o:^17}|{r:^8}\n"
         msg += '-' * 58 + '\n'
+        msg_header = (msg + '.')[:-1]
 
+        #this is just to get the wins/losses/average correct
         for row in rows:
-            truncated_date = row[1].split('T')[0]
-            result = 'W' if row[5] else 'L' if row[6] else 'T'
             wins += row[5]
             losses += row[6]
             if row[3] != 0 or row[4] != 0:
                 total_wars += 1
             average += row[3]
+
+        page_num = 0
+        page = rows[25 * page_num:25 * (page_num + 1)]
+        for row in page:
+            truncated_date = row[1].split('T')[0]
+            result = 'W' if row[5] else 'L' if row[6] else 'T'
             msg += f"{truncated_date:<13}|{row[2]:^8}|{row[3]:^10}|{row[4]:^17}|{result:^8}\n"
 
         msg.rstrip()
@@ -250,7 +301,36 @@ class Stats(commands.Cog):
         msg += f"\n\nAverage: {average:.2f}\n"
         msg += f"W/L Ratio: {wins / (wins + losses):.2%}"
         msg += "```"
-        await ctx.channel.send(msg)
+        sent_msg = await ctx.channel.send(msg)
+        await sent_msg.add_reaction("⬅")
+        await sent_msg.add_reaction("➡")
+
+        while True:
+            try:
+                reaction, user = await self.bot.wait_for('reaction_add', timeout=10.0,
+                                                         check=self.add_check(ctx.message))
+            except asyncio.TimeoutError:
+                break
+            else:
+                pages = len(rows)//25
+                if str(reaction.emoji) == '➡':
+                    page_num = min(page_num + 1, pages)
+                else:
+                    page_num = max(page_num - 1, 0)
+                msg = msg_header
+                page = rows[25 * page_num:25 * (page_num + 1)]
+                if len(page) == 0:
+                    continue
+                for row in page:
+                    truncated_date = row[1].split('T')[0]
+                    result = 'W' if row[5] else 'L' if row[6] else 'T'
+                    msg += f"{truncated_date:<13}|{row[2]:^8}|{row[3]:^10}|{row[4]:^17}|{result:^8}\n"
+
+                msg.rstrip()
+                msg += f"\n\nAverage: {average:.2f}\n"
+                msg += f"W/L Ratio: {wins / (wins + losses):.2%}"
+                msg += "```"
+                await sent_msg.edit(content=msg)
         return
 
     @commands.command(aliases=['gw'])
@@ -269,7 +349,7 @@ class Stats(commands.Cog):
             sql_string = """select Date, Team, Win, Loss, Tie, WarID, MKPS
                             from WarStats WS
                             order by Date desc
-                            limit 25"""
+                            """
             cur.execute(sql_string)
 
         rows = cur.fetchall()
@@ -288,12 +368,18 @@ class Stats(commands.Cog):
         msg = f"```Record vs {team}:\n\n" if team else f"```Latest records:\n\n"
         msg += f"{w:<10}|{d:^15}|{t:^9}|{res:^8}|{m:^8}\n"
         msg += '-' * 52 + '\n'
+        msg_header = (msg + '.')[:-1]
 
+        #just to get the stats
         for row in rows:
-            result = 'W' if row[2] else 'L' if row[3] else 'T'
             wins += row[2]
             losses += row[3]
             ties += row[4]
+
+        page_num = 0
+        page = rows[25 * page_num:25 * (page_num + 1)]
+        for row in page:
+            result = 'W' if row[2] else 'L' if row[3] else 'T'
             truncated_date = row[0].split('T')[0]
             mkps = 'Yes' if row[6] else 'No'
             msg += f"{row[5]:<10}|{truncated_date:^15}|{row[1]:^9}|{result:^8}|{mkps:^8}\n"
@@ -302,7 +388,38 @@ class Stats(commands.Cog):
         msg += f"Record: {wins} - {ties} - {losses}\n"
         msg += f"W/L Ratio: {wins/(wins+losses):.2%}"
         msg += "```"
-        await ctx.channel.send(msg)
+        sent_msg = await ctx.channel.send(msg)
+        await sent_msg.add_reaction("⬅")
+        await sent_msg.add_reaction("➡")
+
+        while True:
+            try:
+                reaction, user = await self.bot.wait_for('reaction_add', timeout=10.0,
+                                                         check=self.add_check(ctx.message))
+            except asyncio.TimeoutError:
+                break
+            else:
+                pages = len(rows) // 25
+                if str(reaction.emoji) == '➡':
+                    page_num = min(page_num + 1, pages)
+                else:
+                    page_num = max(page_num - 1, 0)
+                print(page_num)
+                msg = msg_header
+                page = rows[25 * page_num:25 * (page_num + 1)]
+                if len(page) == 0:
+                    continue
+                for row in page:
+                    result = 'W' if row[2] else 'L' if row[3] else 'T'
+                    truncated_date = row[0].split('T')[0]
+                    mkps = 'Yes' if row[6] else 'No'
+                    msg += f"{row[5]:<10}|{truncated_date:^15}|{row[1]:^9}|{result:^8}|{mkps:^8}\n"
+
+                msg += '\n'
+                msg += f"Record: {wins} - {ties} - {losses}\n"
+                msg += f"W/L Ratio: {wins / (wins + losses):.2%}"
+                msg += "```"
+                await sent_msg.edit(content=msg)
         return
 
     @commands.command(aliases=['ui'])
@@ -476,7 +593,6 @@ class Stats(commands.Cog):
         (indiv_arg, pair_arg, bagger_arg, war_arg) = self.parse_all(arg)
         war_id = await self.updatewars(ctx, arg=war_arg)
         await self.updateindivs(ctx, war_id=war_id, arg=indiv_arg)
-        await self.updatepairs(ctx, arg=pair_arg)
         await self.updatebaggers(ctx, war_id=war_id, arg=bagger_arg)
         return
 
@@ -504,11 +620,13 @@ class Stats(commands.Cog):
         insert_string = """insert into PairStats
                            values (?, ?, ?, ?)"""
         pairlist = []
+        self.refresh_fields()
         roster = self.players[ctx.guild.id]
         for i in range(len(roster)):
             for k in range(i+1, len(roster)):
                 pairlist.append(f"{roster[i]} and {roster[k]}")
 
+        print(pairlist)
         await ctx.channel.send('Updating pair database...')
         con = self.connections[ctx.guild.id]
         cur = con.cursor()
