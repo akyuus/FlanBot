@@ -14,7 +14,7 @@ Example: `~gi alice`
 Example: `~gp alice1 alice2`
 
 ### Get Bagger
-`~gp <bagger_name>`
+`~gb <bagger_name>`
 
 Example: `~gb bobby`
 
@@ -42,7 +42,7 @@ Example: `~ub alice Fw 7 4`
 
 ### Update All
 ```
-~ua (W or L) <opposing_team_tag> [<runner1>, ..., <runner4>] [<score1>, ... <score4>] <bagger> <shocks_pulled> <opposing_shocks_pulled> <mkps | nothing> 
+~ua (W or L) <opposing_team_tag> [<runner1>, ..., <runner4>] [<score1>, ... <score4>] <bagger> <shocks_pulled> <opposing_shocks_pulled> <table_link> <mkps | nothing> 
 ```
 
-Example: `~ua L Mw [fred, adam, shadow, josh] [86, 78, 68, 65] fusion 6 6 mkps`
+Example: `~ua L Mw [fred, adam, shadow, josh] [86, 78, 68, 65] https://table.png fusion 6 6 mkps`
