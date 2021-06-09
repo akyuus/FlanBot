@@ -42,7 +42,7 @@ Example: `~ub alice Fw 7 4`
 
 ### Update All
 ```
-~ua (W or L) <opposing_team_tag> [<runner1>, ..., <runner4>] [<score1>, ... <score4>] <bagger> <shocks_pulled> <opposing_shocks_pulled>
+~ua (W or L) <opposing_team_tag> [<runner1>, ..., <runner4>] [<score1>, ... <score4>] <bagger> <shocks_pulled> <opposing_shocks_pulled> <mkps | nothing> 
 ```
 
-Example: `~ua L Mw [fred, adam, shadow, josh] [86, 78, 68, 65] fusion 6 6`
+Example: `~ua L Mw [fred, adam, shadow, josh] [86, 78, 68, 65] fusion 6 6 mkps`
