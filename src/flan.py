@@ -7,11 +7,10 @@ bot = commands.Bot(command_prefix='~', description='Statistics bot for SA.')
 extensions = ['cogs.stats']
 token = config('BOT_TOKEN')
 
-# Press the green button in the gutter to run the script.
-if __name__ == '__main__':
-    for extension in extensions:
-        bot.load_extension(extension)
-
+def is_reporter_or_owner():
+    async def predicate(ctx):
+        return ctx.author.id == 142907937084407808 or ("Reporter" in list(map(lambda x: str(x), ctx.author.roles)))
+    return commands.check(predicate)
 
 @bot.event
 async def on_ready():
@@ -50,4 +49,7 @@ async def on_command_error(ctx, error: discord.ext.commands.CommandError):
         return
     raise error
 
-bot.run(token, bot=True, reconnect=True)
+if __name__ == '__main__':
+    for extension in extensions:
+        bot.load_extension(extension)
+    bot.run(token, bot=True, reconnect=True)

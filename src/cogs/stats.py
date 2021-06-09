@@ -4,10 +4,11 @@ import re
 import asyncio
 import time
 import json
+import pyshorteners
 from typing import Tuple
 from datetime import datetime
 from discord.ext import commands
-
+from flan import is_reporter_or_owner
 
 class Stats(commands.Cog):
 
@@ -92,14 +93,18 @@ class Stats(commands.Cog):
         regex = (
             r'^(?P<result>W|w|L|l|T|t)\s+(?P<team>.+)\s+\[(?P<runner1>\w+),\s+(?P<runner2>\w+),\s+(?P<runner3>\w+),\s+(?P<runner4>\w+)\]\s+'
             r'\[(?P<score1>\d{2,3}),\s+(?P<score2>\d{2,3}),\s+(?P<score3>\d{2,3}),\s+(?P<score4>\d{2,3})\]\s+'
-            r'(?P<bagger>\w+)\s+(?P<shocks_pulled>\d+)\s+(?P<opponent_shocks>\d+)\s*(?P<mkps>(?<=\s)mkps)?$')
+            r'(?P<bagger>\w+)\s+(?P<shocks_pulled>\d+)\s+(?P<opponent_shocks>\d+)\s+'
+            r'(?P<table_link>https://.*png)\s*'
+            r'(?P<mkps>(?<=\s)mkps)?$')
         match = re.match(regex, arg)
         if not match:
             raise commands.BadArgument
 
+        shortener = pyshorteners.Shortener()
         result = match.group('result')
         team = match.group('team')
         mkps = match.group('mkps')
+        table_link = shortener.tinyurl.short(match.group('table_link'))
         runners = []
         scores = []
         for i in range(1, 5):
@@ -111,7 +116,8 @@ class Stats(commands.Cog):
         indiv_arg = f"{team} [{', '.join(runners)}] [{', '.join(scores)}]"
         pair_arg = f"{result} [{', '.join(runners)}, {bagger}]"
         bagger_arg = f"{bagger} {team} {shocks_pulled} {opponent_shocks}"
-        war_arg = f"{team} {result}"
+        war_arg = f"{team} {result} {table_link}"
+        print(war_arg)
         if mkps:
             war_arg += f" {mkps}"
         return indiv_arg, pair_arg, bagger_arg, war_arg
@@ -171,7 +177,7 @@ class Stats(commands.Cog):
 
         while True:
             try:
-                reaction, user = await self.bot.wait_for('reaction_add', timeout=10.0, check=self.add_check(ctx.message))
+                reaction, user = await self.bot.wait_for('reaction_add', timeout=30.0, check=self.add_check(ctx.message))
             except asyncio.TimeoutError:
                 break
             else:
@@ -314,7 +320,7 @@ class Stats(commands.Cog):
 
         while True:
             try:
-                reaction, user = await self.bot.wait_for('reaction_add', timeout=10.0,
+                reaction, user = await self.bot.wait_for('reaction_add', timeout=30.0,
                                                          check=self.add_check(ctx.message))
             except asyncio.TimeoutError:
                 break
@@ -347,13 +353,13 @@ class Stats(commands.Cog):
         con = self.connections[ctx.guild.id]
         cur = con.cursor()
         if team:
-            sql_string = """select Date, Team, Win, Loss, Tie, WarID, MKPS
+            sql_string = """select Date, Team, Win, Loss, Tie, WarID, MKPS, table_link
                             from WarStats WS
                             where WS.Team=?
                             order by Date desc"""
             cur.execute(sql_string, (team,))
         else:
-            sql_string = """select Date, Team, Win, Loss, Tie, WarID, MKPS
+            sql_string = """select Date, Team, Win, Loss, Tie, WarID, MKPS, table_link
                             from WarStats WS
                             order by Date desc
                             """
@@ -371,9 +377,10 @@ class Stats(commands.Cog):
         d = "Date"
         t = "Team"
         m = "MKPS?"
+        tl = "Table"
         res = "Result"
         msg = f"```Record vs {team}:\n\n" if team else f"```Latest records:\n\n"
-        msg += f"{w:<10}|{d:^15}|{t:^9}|{res:^8}|{m:^8}\n"
+        msg += f"{w:<8}|{d:^15}|{t:^9}|{res:^8}|{m:^8}| {tl:<42}\n"
         msg += '-' * 52 + '\n'
         msg_header = (msg + '.')[:-1]
 
@@ -384,43 +391,44 @@ class Stats(commands.Cog):
             ties += row[4]
 
         page_num = 0
-        page = rows[25 * page_num:25 * (page_num + 1)]
+        page = rows[10 * page_num:10 * (page_num + 1)]
         for row in page:
             result = 'W' if row[2] else 'L' if row[3] else 'T'
             truncated_date = row[0].split('T')[0]
             mkps = 'Yes' if row[6] else 'No'
-            msg += f"{row[5]:<10}|{truncated_date:^15}|{row[1]:^9}|{result:^8}|{mkps:^8}\n"
+            msg += f"{row[5]:<8}|{truncated_date:^15}|{row[1]:^9}|{result:^8}|{mkps:^8}| {row[7]:<42}\n"
 
         msg += '\n'
         msg += f"Record: {wins} - {ties} - {losses}\n"
         msg += f"W/L Ratio: {wins/(wins+losses):.2%}"
         msg += "```"
+        print(len(msg))
         sent_msg = await ctx.channel.send(msg)
         await sent_msg.add_reaction("⬅")
         await sent_msg.add_reaction("➡")
 
         while True:
             try:
-                reaction, user = await self.bot.wait_for('reaction_add', timeout=10.0,
+                reaction, user = await self.bot.wait_for('reaction_add', timeout=30.0,
                                                          check=self.add_check(ctx.message))
             except asyncio.TimeoutError:
                 break
             else:
-                pages = len(rows) // 25
+                pages = len(rows) // 10
                 if str(reaction.emoji) == '➡':
                     page_num = min(page_num + 1, pages)
                 else:
                     page_num = max(page_num - 1, 0)
                 print(page_num)
                 msg = msg_header
-                page = rows[25 * page_num:25 * (page_num + 1)]
+                page = rows[10 * page_num:10 * (page_num + 1)]
                 if len(page) == 0:
                     continue
                 for row in page:
                     result = 'W' if row[2] else 'L' if row[3] else 'T'
                     truncated_date = row[0].split('T')[0]
                     mkps = 'Yes' if row[6] else 'No'
-                    msg += f"{row[5]:<10}|{truncated_date:^15}|{row[1]:^9}|{result:^8}|{mkps:^8}\n"
+                    msg += f"{row[5]:<8}|{truncated_date:^15}|{row[1]:^9}|{result:^8}|{mkps:^8}| {row[7]:<42}\n"
 
                 msg += '\n'
                 msg += f"Record: {wins} - {ties} - {losses}\n"
@@ -548,12 +556,15 @@ class Stats(commands.Cog):
     @commands.has_role('Reporter')
     async def updatewars(self, ctx: discord.ext.commands.Context, *, arg: str) -> int:
         """Updates the war record. Syntax is <opposing_team_tag> <W/L/T>"""
-        regex = r"(?P<team>\S+)\s+(?P<result>W|w|L|l|T|t)\s*(?P<mkps>(?<=\s)mkps)?"
+        regex = r"(?P<team>\S+)\s+(?P<result>W|w|L|l|T|t)\s+(?P<table_link>https://.*)\s*(?P<mkps>(?<=\s)mkps)?"
         match = re.match(regex, arg)
         if not match:
+            print('error in update wars')
             raise commands.BadArgument
+
         team = match.group('team')
         result = match.group('result')
+        table_link = match.group('table_link')
         mkps = match.group('mkps')
         msg = f"This will be reported as a **win** against {team}. Is that okay? (y/n)" if result.lower() == 'w' \
               else f"This will be reported as a **loss** against {team}. Is that okay? (y/n)" if result.lower() == 'l' \
@@ -570,15 +581,15 @@ class Stats(commands.Cog):
             await ctx.channel.send('Ok, updating...')
             con = self.connections[ctx.guild.id]
             cur = con.cursor()
-            sql_string = """insert into WarStats(Team, Date, Win, Loss, Tie) 
-                            values(?, ?, ?, ?, ?)"""
+            sql_string = """insert into WarStats(Team, Date, Win, Loss, Tie, table_link) 
+                            values(?, ?, ?, ?, ?, ?)"""
             date = datetime.fromtimestamp(int(time.time())).isoformat()
             if result.lower() == 'w':
-                cur.execute(sql_string, (team, date, 1, 0, 0))
+                cur.execute(sql_string, (team, date, 1, 0, 0, table_link))
             elif result.lower() == 'l':
-                cur.execute(sql_string, (team, date, 0, 1, 0))
+                cur.execute(sql_string, (team, date, 0, 1, 0, table_link))
             else:
-                cur.execute(sql_string, (team, date, 0, 0, 1))
+                cur.execute(sql_string, (team, date, 0, 0, 1, table_link))
             con.commit()
             cur.execute("select max(WarID) from WarStats")
             row = cur.fetchone()
@@ -594,7 +605,7 @@ class Stats(commands.Cog):
     @commands.command(aliases=['ua'])
     @commands.guild_only()
     @commands.max_concurrency(1)
-    @commands.has_role('Reporter')
+    @is_reporter_or_owner()
     async def updateall(self, ctx: discord.ext.commands.Context, *, arg: str):
         """Updates everything at once. Syntax is complex. Check https://github.com/akyuus/FlanBot for an example."""
         (indiv_arg, pair_arg, bagger_arg, war_arg) = self.parse_all(arg)
